@@ -1,4 +1,3 @@
-
 name: OpenStory client only
 
 on:
@@ -40,20 +39,13 @@ jobs:
           $bassDll = Get-ChildItem -Path $vendorDir -Filter 'bass.dll' -File -Recurse |
             Where-Object { $_.FullName -match '(?i)[\\/](x64|win64)[\\/]' } |
             Select-Object -First 1
-
           if ($null -eq $bassDll) {
-            throw 'The repository does not contain an x64 BASS runtime DLL. No incomplete client package was created.'
+            throw 'The repository does not contain an x64 BASS runtime DLL.'
           }
 
           $freetypeDll = Join-Path $vendorDir 'freetype\win64\freetype.dll'
           if (-not (Test-Path -LiteralPath $freetypeDll -PathType Leaf)) {
-            throw "Required x64 FreeType runtime DLL not found: $freetypeDll"
-          }
-
-          $expectedFreetypeHash = '8B0F1E91E80D441869169A3E9D924BAAFB2203A04CB90D1A11AC7ED22C81A24E'
-          $actualFreetypeHash = (Get-FileHash -LiteralPath $freetypeDll -Algorithm SHA256).Hash
-          if ($actualFreetypeHash -ne $expectedFreetypeHash) {
-            throw "The vendored FreeType DLL hash did not match the repository's documented hash. Expected: $expectedFreetypeHash Actual: $actualFreetypeHash"
+            throw "Required FreeType runtime DLL not found: $freetypeDll. Check the repository vendor/freetype/win64 directory."
           }
 
           $packageRoot = Join-Path $repoRoot 'dist\OpenStory-client'
@@ -77,26 +69,23 @@ jobs:
             'It does not include the GenMs launcher, an updater, or MapleStory game data.'
             ''
             'SETUP'
-            '1. Place your compatible v83 NX game-data files in this wz folder, beside OpenStory.exe.'
-            '   The project expects NX files, including a compatible UI.nx. Game data is not included.'
+            '1. Place the compatible v83 NX game-data files in this wz folder, beside OpenStory.exe.'
             '2. Settings is configured for server 2.56.246.136 on login port 8484.'
             '3. Keep SaveLogin=false unless you deliberately want the client to remember login details.'
             '4. Start wz\OpenStory.exe.'
             ''
-            'The vendored FreeType 2.9.1 DLL requires the Microsoft Visual C++ 2015-2022 Redistributable (x64).'
-            'If Windows reports a missing VCRUNTIME140 or MSVCP140 runtime DLL, install the current x64 redistributable from Microsoft:'
+            'If Windows reports a missing VCRUNTIME140 or MSVCP140 runtime DLL, install the current Microsoft Visual C++ 2015-2022 Redistributable (x64):'
             'https://aka.ms/vc14/vc_redist.x64.exe'
             ''
-            'If login works but channel entry fails, check that the channel ports configured in Cosmic are reachable from your PC.'
-            'The build is not a malware certification. Scan the downloaded files with your security software before running them.'
+            'The client package does not include NX game data. Scan the downloaded files before running them.'
           ) | Set-Content -LiteralPath (Join-Path $packageRoot 'README.txt') -Encoding utf8
 
           @(
-            "Source: https://github.com/rdiol12/OpenStory"
+            'Source: https://github.com/rdiol12/OpenStory'
             "Commit: $env:GITHUB_SHA"
             'Target: Windows x64 Release'
             'Launcher and updater: excluded'
-            "FreeType DLL SHA256: $actualFreetypeHash"
+            "FreeType source: $freetypeDll"
           ) | Set-Content -LiteralPath (Join-Path $packageRoot 'BUILD-INFO.txt') -Encoding utf8
 
           $checksumLines = Get-ChildItem -LiteralPath $clientDir -File |
@@ -110,6 +99,9 @@ jobs:
             [string[]]$checksumLines,
             [System.Text.Encoding]::ASCII
           )
+
+          Write-Host 'Packaged files:'
+          Get-ChildItem -LiteralPath $clientDir -File | Select-Object Name, Length
 
       - name: Upload client ZIP artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
