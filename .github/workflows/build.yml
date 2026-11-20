@@ -1,63 +1,94 @@
-name: Build
+name: OpenStory client only
 
 on:
-  push:
-    branches: [ master ]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  client:
-    runs-on: windows-latest
+  build-client:
+    name: Build Windows x64 client
+    runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure
-        run: cmake -S . -B build
-
-      - name: Build
-        run: cmake --build build --config Release
-
-      - uses: actions/upload-artifact@v4
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          name: OpenStory-client
-          path: |
-            wz/OpenStory.exe
-            wz/OpenStory.pdb
+          persist-credentials: false
 
-  launcher:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+      - name: Configure x64 Release build
+        shell: pwsh
+        run: cmake -S . -B build -A x64
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
+      - name: Build OpenStory only
+        shell: pwsh
+        run: cmake --build build --config Release --target OpenStory --parallel
 
-      - name: Publish
-        run: dotnet publish launcher/AugurLauncher.csproj -c Release
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: GenMs-launcher
-          path: launcher/bin/Release/net8.0-windows/win-x64/publish/GenMs.exe
-
-  release:
-    runs-on: ubuntu-latest
-    needs: [client, launcher]
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-          path: dist
-
-      - name: Publish rolling release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Package client
+        shell: pwsh
         run: |
-          gh release delete latest -R ${{ github.repository }} --yes --cleanup-tag || true
-          gh release create latest dist/* -R ${{ github.repository }} \
-            --title "Latest build" --prerelease \
-            --notes "Automated build of ${{ github.sha }}"
+          $ErrorActionPreference = 'Stop'
+
+          $clientExe = Join-Path $env:GITHUB_WORKSPACE 'wz\OpenStory.exe'
+          if (-not (Test-Path -LiteralPath $clientExe -PathType Leaf)) {
+            throw "Expected client executable was not produced: $clientExe"
+          }
+
+          $bassDll = Get-ChildItem -Path 'vendor' -Filter 'bass.dll' -File -Recurse |
+            Where-Object { $_.FullName -match '(?i)[\\/](x64|win64)[\\/]' } |
+            Select-Object -First 1
+
+          if ($null -eq $bassDll) {
+            throw 'The repository does not contain an x64 BASS runtime DLL. No incomplete client package was created.'
+          }
+
+          $packageRoot = Join-Path $env:GITHUB_WORKSPACE 'dist\OpenStory-client'
+          $clientDir = Join-Path $packageRoot 'wz'
+          New-Item -ItemType Directory -Force -Path $clientDir | Out-Null
+
+          Copy-Item -LiteralPath $clientExe -Destination (Join-Path $clientDir 'OpenStory.exe')
+          Copy-Item -LiteralPath $bassDll.FullName -Destination (Join-Path $clientDir 'bass.dll')
+
+          @(
+            'ServerIP = YOUR_VPS_PUBLIC_IP'
+            'ServerPort = 8484'
+            'SaveLogin = false'
+          ) | Set-Content -LiteralPath (Join-Path $clientDir 'Settings') -Encoding ascii
+
+          @(
+            'OpenStory client-only build'
+            ''
+            'This package contains the Windows x64 client and its BASS audio runtime.'
+            'It does not include the GenMs launcher, an updater, or MapleStory game data.'
+            ''
+            'SETUP'
+            '1. Place your compatible v83 NX game-data files in this wz folder, beside OpenStory.exe.'
+            '   The project expects NX files, including a compatible UI.nx. Game data is not included.'
+            '2. Edit wz\Settings and replace YOUR_VPS_PUBLIC_IP with your Cosmic VPS public IP.'
+            '3. Confirm ServerPort matches your Cosmic login port. The template uses 8484.'
+            '4. Keep SaveLogin=false unless you deliberately want the client to remember login details.'
+            '5. Start wz\OpenStory.exe.'
+            ''
+            'If login works but channel entry fails, check that the channel ports configured in Cosmic are reachable from your PC.'
+            'The first build is not a malware certification. Scan the downloaded files with your own security software before running them.'
+          ) | Set-Content -LiteralPath (Join-Path $packageRoot 'README.txt') -Encoding utf8
+
+          @(
+            "Source: https://github.com/rdiol12/OpenStory"
+            "Commit: $env:GITHUB_SHA"
+            'Target: Windows x64 Release'
+            'Launcher and updater: excluded'
+          ) | Set-Content -LiteralPath (Join-Path $packageRoot 'BUILD-INFO.txt') -Encoding utf8
+
+          Get-ChildItem -LiteralPath $clientDir -File |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  wz\$($_.Name)" } |
+            Set-Content -LiteralPath (Join-Path $packageRoot 'SHA256SUMS.txt') -Encoding ascii
+
+      - name: Upload client ZIP artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: OpenStory-client-windows-x64
+          path: dist/OpenStory-client
+          if-no-files-found: error
+          retention-days: 7
