@@ -1,3 +1,4 @@
+
 name: OpenStory client only
 
 on:
@@ -28,13 +29,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $repoRoot = $env:GITHUB_WORKSPACE
 
-          $clientExe = Join-Path $env:GITHUB_WORKSPACE 'wz\OpenStory.exe'
+          $clientExe = Join-Path $repoRoot 'wz\OpenStory.exe'
           if (-not (Test-Path -LiteralPath $clientExe -PathType Leaf)) {
             throw "Expected client executable was not produced: $clientExe"
           }
 
-          $bassDll = Get-ChildItem -Path 'vendor' -Filter 'bass.dll' -File -Recurse |
+          $vendorDir = Join-Path $repoRoot 'vendor'
+          $bassDll = Get-ChildItem -Path $vendorDir -Filter 'bass.dll' -File -Recurse |
             Where-Object { $_.FullName -match '(?i)[\\/](x64|win64)[\\/]' } |
             Select-Object -First 1
 
@@ -42,15 +45,27 @@ jobs:
             throw 'The repository does not contain an x64 BASS runtime DLL. No incomplete client package was created.'
           }
 
-          $packageRoot = Join-Path $env:GITHUB_WORKSPACE 'dist\OpenStory-client'
+          $freetypeDll = Join-Path $vendorDir 'freetype\win64\freetype.dll'
+          if (-not (Test-Path -LiteralPath $freetypeDll -PathType Leaf)) {
+            throw "Required x64 FreeType runtime DLL not found: $freetypeDll"
+          }
+
+          $expectedFreetypeHash = '8B0F1E91E80D441869169A3E9D924BAAFB2203A04CB90D1A11AC7ED22C81A24E'
+          $actualFreetypeHash = (Get-FileHash -LiteralPath $freetypeDll -Algorithm SHA256).Hash
+          if ($actualFreetypeHash -ne $expectedFreetypeHash) {
+            throw "The vendored FreeType DLL hash did not match the repository's documented hash. Expected: $expectedFreetypeHash Actual: $actualFreetypeHash"
+          }
+
+          $packageRoot = Join-Path $repoRoot 'dist\OpenStory-client'
           $clientDir = Join-Path $packageRoot 'wz'
           New-Item -ItemType Directory -Force -Path $clientDir | Out-Null
 
           Copy-Item -LiteralPath $clientExe -Destination (Join-Path $clientDir 'OpenStory.exe')
           Copy-Item -LiteralPath $bassDll.FullName -Destination (Join-Path $clientDir 'bass.dll')
+          Copy-Item -LiteralPath $freetypeDll -Destination (Join-Path $clientDir 'freetype.dll')
 
           @(
-            'ServerIP = YOUR_VPS_PUBLIC_IP'
+            'ServerIP = 2.56.246.136'
             'ServerPort = 8484'
             'SaveLogin = false'
           ) | Set-Content -LiteralPath (Join-Path $clientDir 'Settings') -Encoding ascii
@@ -58,19 +73,22 @@ jobs:
           @(
             'OpenStory client-only build'
             ''
-            'This package contains the Windows x64 client and its BASS audio runtime.'
+            'This package contains the Windows x64 client and its BASS and FreeType runtime DLLs.'
             'It does not include the GenMs launcher, an updater, or MapleStory game data.'
             ''
             'SETUP'
             '1. Place your compatible v83 NX game-data files in this wz folder, beside OpenStory.exe.'
             '   The project expects NX files, including a compatible UI.nx. Game data is not included.'
-            '2. Edit wz\Settings and replace YOUR_VPS_PUBLIC_IP with your Cosmic VPS public IP.'
-            '3. Confirm ServerPort matches your Cosmic login port. The template uses 8484.'
-            '4. Keep SaveLogin=false unless you deliberately want the client to remember login details.'
-            '5. Start wz\OpenStory.exe.'
+            '2. Settings is configured for server 2.56.246.136 on login port 8484.'
+            '3. Keep SaveLogin=false unless you deliberately want the client to remember login details.'
+            '4. Start wz\OpenStory.exe.'
+            ''
+            'The vendored FreeType 2.9.1 DLL requires the Microsoft Visual C++ 2015-2022 Redistributable (x64).'
+            'If Windows reports a missing VCRUNTIME140 or MSVCP140 runtime DLL, install the current x64 redistributable from Microsoft:'
+            'https://aka.ms/vc14/vc_redist.x64.exe'
             ''
             'If login works but channel entry fails, check that the channel ports configured in Cosmic are reachable from your PC.'
-            'The first build is not a malware certification. Scan the downloaded files with your own security software before running them.'
+            'The build is not a malware certification. Scan the downloaded files with your security software before running them.'
           ) | Set-Content -LiteralPath (Join-Path $packageRoot 'README.txt') -Encoding utf8
 
           @(
@@ -78,12 +96,20 @@ jobs:
             "Commit: $env:GITHUB_SHA"
             'Target: Windows x64 Release'
             'Launcher and updater: excluded'
+            "FreeType DLL SHA256: $actualFreetypeHash"
           ) | Set-Content -LiteralPath (Join-Path $packageRoot 'BUILD-INFO.txt') -Encoding utf8
 
-          Get-ChildItem -LiteralPath $clientDir -File |
-            Get-FileHash -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash)  wz\$($_.Name)" } |
-            Set-Content -LiteralPath (Join-Path $packageRoot 'SHA256SUMS.txt') -Encoding ascii
+          $checksumLines = Get-ChildItem -LiteralPath $clientDir -File |
+            Sort-Object Name |
+            ForEach-Object {
+              $fileHash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+              "$($fileHash.Hash)  wz/$($_.Name)"
+            }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path $packageRoot 'SHA256SUMS.txt'),
+            [string[]]$checksumLines,
+            [System.Text.Encoding]::ASCII
+          )
 
       - name: Upload client ZIP artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
